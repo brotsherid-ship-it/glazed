@@ -1,3 +1,4 @@
+private final Random random = new Random();
 package com.nnpg.glazed.modules.main;
 
 import com.nnpg.glazed.GlazedAddon;
@@ -115,14 +116,22 @@ public class OrderSniper extends Module {
 
         switch (stage) {
             case REFRESH -> {
-                if (mc.currentScreen instanceof GenericContainerScreen screen) {
-                    ScreenHandler handler = screen.getScreenHandler();
-                    mc.interactionManager.clickSlot(handler.syncId, 49, 1, SlotActionType.QUICK_MOVE, mc.player);
-                    mc.interactionManager.clickSlot(handler.syncId, 49, 1, SlotActionType.QUICK_MOVE, mc.player);
-                    mc.interactionManager.clickSlot(handler.syncId, 49, 1, SlotActionType.QUICK_MOVE, mc.player);
-                    mc.interactionManager.clickSlot(handler.syncId, 49, 1, SlotActionType.QUICK_MOVE, mc.player);
-                    mc.interactionManager.clickSlot(handler.syncId, 49, 1, SlotActionType.QUICK_MOVE, mc.player);
-
+    if (mc.currentScreen instanceof GenericContainerScreen screen) {
+        // Rastgele gecikme dolana kadar bekle, dolunca içeri gir
+        if (ticksSinceStageStart >= (delayTicks.get() + random.nextInt(3))) {
+            ScreenHandler handler = screen.getScreenHandler();
+            // Sadece TEK BİR tıklama yapıyoruz
+            mc.interactionManager.clickSlot(handler.syncId, 49, 1, SlotActionType.QUICK_MOVE, mc.player);
+            
+            stage = Stage.OPEN_ORDERS;
+            ticksSinceStageStart = 0;
+        }
+    } else {
+        // Eğer ekran açık değilse direkt diğer aşamaya geç
+        stage = Stage.OPEN_ORDERS;
+        ticksSinceStageStart = 0;
+    }
+}
                     if (now - stageStart > 50) {
                         stage = Stage.OPEN_ORDERS;
                         stageStart = now;
@@ -156,20 +165,33 @@ public class OrderSniper extends Module {
             }
 
             case SELECT_ORDER -> {
-                if (!(mc.currentScreen instanceof GenericContainerScreen screen)) return;
-                ScreenHandler handler = screen.getScreenHandler();
-                for (Slot slot : handler.slots) {
-                    ItemStack stack = slot.getStack();
-                    if (!stack.isEmpty() && isMatchingOrder(stack)) {
-                        if (isBlacklisted(getOrderPlayerName(stack))) continue;
-                        savedSyncId = handler.syncId;
-                        mc.interactionManager.clickSlot(handler.syncId, slot.id, 0, SlotActionType.PICKUP, mc.player);
-                        stage = Stage.WAIT_DEPOSIT_GUI;
-                        stageStart = now;
-                        ticksSinceStageStart = 0;
-                        return;
-                    }
-                }
+    if (!(mc.currentScreen instanceof GenericContainerScreen screen)) return;
+    
+    // GÜVENLİK: Belirlenen gecikme + rastgele 0-2 tick beklemeden işlem yapma
+    if (ticksSinceStageStart < (delayTicks.get() + random.nextInt(3))) return;
+
+    ScreenHandler handler = screen.getScreenHandler();
+    for (Slot slot : handler.slots) {
+        ItemStack stack = slot.getStack();
+        if (!stack.isEmpty() && isMatchingOrder(stack)) {
+            if (isBlacklisted(getOrderPlayerName(stack))) continue;
+            
+            savedSyncId = handler.syncId;
+            mc.interactionManager.clickSlot(handler.syncId, slot.id, 0, SlotActionType.PICKUP, mc.player);
+            
+            stage = Stage.WAIT_DEPOSIT_GUI;
+            // stageStart = now; // Artık buna pek gerek yok ama kalabilir
+            ticksSinceStageStart = 0; // Bir sonraki aşama için sıfırla
+            return;
+        }
+    }
+    
+    // Eğer ekran uzun süre açık kalırsa (sipariş bulunamazsa) yenilemeye dön
+    if (ticksSinceStageStart > 100) { 
+        stage = Stage.REFRESH;
+        ticksSinceStageStart = 0;
+    }
+}
                 if (now - stageStart > 2000) {
                     mc.interactionManager.clickSlot(handler.syncId, 49, 1, SlotActionType.QUICK_MOVE, mc.player);
                     mc.interactionManager.clickSlot(handler.syncId, 49, 1, SlotActionType.QUICK_MOVE, mc.player);
@@ -198,47 +220,63 @@ public class OrderSniper extends Module {
                 }
             }
 
-            case TRANSFER_ITEMS -> {
-                if (!(mc.currentScreen instanceof GenericContainerScreen screen)) return;
-                ScreenHandler handler = screen.getScreenHandler();
+case TRANSFER_ITEMS -> {
+    if (!(mc.currentScreen instanceof GenericContainerScreen screen)) return;
+    
+    // GÜVENLİK: Her item arasında senin ayarladığın gecikme kadar bekle
+    if (ticksSinceStageStart < (delayTicks.get() + random.nextInt(2))) return;
 
-                boolean chestHasSpace = false;
-                for (Slot slot : handler.slots) {
-                    if (slot.inventory != mc.player.getInventory() && slot.getStack().isEmpty()) {
-                        chestHasSpace = true;
-                        break;
-                    }
-                }
+    ScreenHandler handler = screen.getScreenHandler();
 
-                if (!chestHasSpace) {
-                    mc.player.closeHandledScreen();
-                    stage = Stage.WAIT_CONFIRM_GUI;
-                    stageStart = now;
-                    ticksSinceStageStart = 0;
-                    return;
-                }
+    // 1. Sandıkta yer var mı kontrolü (Senin orijinal kodun)
+    boolean chestHasSpace = false;
+    for (Slot slot : handler.slots) {
+        if (slot.inventory != mc.player.getInventory() && slot.getStack().isEmpty()) {
+            chestHasSpace = true;
+            break;
+        }
+    }
 
-                boolean hasNormalItems = false;
-                boolean hasShulkers = false;
-                for (ItemStack stack : mc.player.getInventory().main) {
-                    if (!stack.isEmpty()) {
-                        if (stack.isOf(targetItem.get())) hasNormalItems = true;
-                        else if (shulkerSupport.get() && isShulker(stack) && shulkerContainsTarget(stack)) hasShulkers = true;
-                    }
-                }
+    if (!chestHasSpace) {
+        mc.player.closeHandledScreen();
+        stage = Stage.WAIT_CONFIRM_GUI;
+        ticksSinceStageStart = 0;
+        return;
+    }
 
-                for (Slot slot : handler.slots) {
-                    if (slot.inventory == mc.player.getInventory()) {
-                        ItemStack stack = slot.getStack();
-                        if (!stack.isEmpty()) {
-                            if (stack.isOf(targetItem.get()) || (!hasNormalItems && shulkerSupport.get() && isShulker(stack) && shulkerContainsTarget(stack))) {
-                                mc.interactionManager.clickSlot(handler.syncId, slot.id, 0, SlotActionType.PICKUP, mc.player);
-                                mc.interactionManager.clickSlot(handler.syncId, slot.id, 0, SlotActionType.PICKUP_ALL, mc.player);
-                                mc.interactionManager.clickSlot(handler.syncId, slot.id, 0, SlotActionType.QUICK_MOVE, mc.player);
-                            }
-                        }
-                    }
+    // 2. Envanterde ne var ne yok kontrolü (Senin orijinal kodun)
+    boolean hasNormalItems = false;
+    for (ItemStack stack : mc.player.getInventory().main) {
+        if (!stack.isEmpty() && stack.isOf(targetItem.get())) {
+            hasNormalItems = true;
+            break;
+        }
+    }
+
+    // 3. EŞYA TAŞIMA KISMI (BURAYI DÜZELTTİK)
+    for (Slot slot : handler.slots) {
+        if (slot.inventory == mc.player.getInventory()) {
+            ItemStack stack = slot.getStack();
+            if (!stack.isEmpty()) {
+                // Senin mantığın: Önce normal itemlar, yoksa shulkerlar
+                if (stack.isOf(targetItem.get()) || (!hasNormalItems && shulkerSupport.get() && isShulker(stack) && shulkerContainsTarget(stack))) {
+                    
+                    // KRİTİK DÜZELTME: O 3 tane clickSlot yerine sadece TEK BİR Quick Move
+                    mc.interactionManager.clickSlot(handler.syncId, slot.id, 0, SlotActionType.QUICK_MOVE, mc.player);
+                    
+                    // SIFIRLAMA VE ÇIKIŞ: Bir tane taşıdık, tick'i bitiriyoruz ki insani gözüksün
+                    ticksSinceStageStart = 0; 
+                    return; 
                 }
+            }
+        }
+    }
+
+    // Eğer döngü bittiyse ve yukarıdaki return'e hiç girmediyse (taşınacak item kalmadıysa)
+    mc.player.closeHandledScreen();
+    stage = Stage.WAIT_CONFIRM_GUI;
+    ticksSinceStageStart = 0;
+}
 
                 boolean stillHasItems = false;
                 for (ItemStack stack : mc.player.getInventory().main) {
@@ -256,27 +294,32 @@ public class OrderSniper extends Module {
                 }
             }
 
-            case WAIT_CONFIRM_GUI -> {
-                if (ticksSinceStageStart < Math.max(8, delayTicks.get())) return;
+case WAIT_CONFIRM_GUI -> {
+                // Ekranın gelmesi için min 8 tick veya senin gecikmen kadar bekle
+                if (ticksSinceStageStart < Math.max(8, delayTicks.get() + random.nextInt(2))) return;
+                
                 if (mc.currentScreen instanceof GenericContainerScreen) {
                     stage = Stage.CONFIRM_SALE;
                     ticksSinceStageStart = 0;
-                } else if (now - stageStart > 2000) {
+                } else if (ticksSinceStageStart > 100) { // 5 saniye bekleme limiti (now-stageStart yerine daha stabil)
                     toggle();
                 }
             }
 
             case CONFIRM_SALE -> {
                 if (!(mc.currentScreen instanceof GenericContainerScreen screen)) return;
+                
+                // Onay butonuna basmadan önce kısa bir insansı bekleme
+                if (ticksSinceStageStart < (delayTicks.get() + random.nextInt(3))) return;
+
                 ScreenHandler handler = screen.getScreenHandler();
                 for (Slot slot : handler.slots) {
                     ItemStack stack = slot.getStack();
                     if (isGreenGlass(stack)) {
-                        for (int i = 0; i < 3; i++) {
-                            mc.interactionManager.clickSlot(handler.syncId, slot.id, 0, SlotActionType.PICKUP, mc.player);
-                        }
+                        // DÜZELTME: O 3'lü for döngüsünü sildik. Tek tık yeterli.
+                        mc.interactionManager.clickSlot(handler.syncId, slot.id, 0, SlotActionType.PICKUP, mc.player);
+                        
                         stage = Stage.FINAL_EXIT;
-                        stageStart = now;
                         ticksSinceStageStart = 0;
                         return;
                     }
@@ -284,11 +327,13 @@ public class OrderSniper extends Module {
             }
 
             case FINAL_EXIT -> {
+                // Ekranı kapat ve bekle
                 if (mc.currentScreen != null) {
                     mc.player.closeHandledScreen();
-                    // Aspetta un po' prima di continuare per assicurarsi che la GUI sia chiusa (PIZZZZZZAAAA!!!!!!!!)
-                    if (ticksSinceStageStart < Math.max(5, delayTicks.get())) return;
                 }
+                
+                // Ekran kapandıktan sonra 5-7 tick beklemeden yeni döngüye girme (PIZZA!)
+                if (ticksSinceStageStart < Math.max(6, delayTicks.get() + random.nextInt(2))) return;
 
                 if (!hasItemsToSell()) {
                     if (notifications.get()) {
@@ -297,25 +342,17 @@ public class OrderSniper extends Module {
                     toggle();
                 } else {
                     stage = Stage.CYCLE_PAUSE;
-                    stageStart = now;
                     ticksSinceStageStart = 0;
                 }
             }
 
             case CYCLE_PAUSE -> {
-                // Changed from 25 ticks to 5 ticks (0.25 seconds at 20 TPS)
-                if (ticksSinceStageStart >= Math.max(5, delayTicks.get())) {
+                // Döngüler arası kısa nefes payı (5-10 tick arası rastgele)
+                if (ticksSinceStageStart >= (5 + random.nextInt(6))) {
                     stage = Stage.REFRESH;
-                    stageStart = now;
                     ticksSinceStageStart = 0;
                 }
             }
-
-            case NONE -> {}
-        }
-    }
-
-
 
     private boolean isBlacklisted(String playerName) {
         if (playerName == null || blacklistedPlayers.get().isEmpty()) return false;
